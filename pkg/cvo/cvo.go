@@ -837,7 +837,7 @@ func (optr *Operator) sync(ctx context.Context, key string) error {
 	config := validation.ClearInvalidFields(original, errs)
 
 	// identify the desired next version
-	desired, found := findUpdateFromConfig(config, optr.release.Architecture)
+	desired, found, selectionErr := findUpdateFromConfig(config, optr.release.Architecture)
 	initialized := optr.configSync.Initialized()
 	if found && initialized {
 		klog.V(2).Infof("Desired version from spec is %#v after initialization", desired)
@@ -882,8 +882,22 @@ func (optr *Operator) sync(ctx context.Context, key string) error {
 	// inform the config sync loop about our desired state
 	status := optr.configSync.Update(ctx, config.Generation, desired, config, state, optr.getEnabledFeatureGates())
 
+	setDesiredReleaseSelectionFailure(status, selectionErr, initialized)
+
 	// write cluster version status
 	return optr.syncStatus(ctx, original, config, status, errs)
+}
+
+func setDesiredReleaseSelectionFailure(status *SyncWorkerStatus, selectionErr error, initialized bool) {
+	// Preserve payload-load failures, which ReleaseAccepted reports exclusively.
+	if selectionErr == nil || !initialized || status.loadPayloadStatus.Failure != nil {
+		return
+	}
+	if updateErr, ok := selectionErr.(*payload.UpdateError); ok {
+		status.loadPayloadStatus.Step = "ResolveRelease"
+		status.loadPayloadStatus.Message = updateErr.Message
+		status.loadPayloadStatus.Failure = updateErr
+	}
 }
 
 // availableUpdatesSync is triggered on cluster version change (and periodic requeues) to
